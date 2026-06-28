@@ -1,0 +1,11 @@
+# Ignore local python runtime files
+__pycache__/
+*.pyc
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Keep the wildcards folder but ignore all personal text/JSON/YAML contents inside it
+wildcards/*
+!wildcards/.gitkeep
