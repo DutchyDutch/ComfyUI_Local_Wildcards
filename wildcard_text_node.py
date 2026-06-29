@@ -5,6 +5,7 @@ import re
 import secrets
 from pathlib import Path
 
+__version__ = "1.1.0"
 
 NODE_DIR = Path(__file__).resolve().parent
 WILDCARD_DIR = NODE_DIR / "wildcards"
