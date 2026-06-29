@@ -21,7 +21,6 @@ MAX_DROPDOWN_ITEMS = 50000
 SUPPORTED_FILE_EXTENSIONS = [".txt", ".json", ".yaml", ".yml"]
 
 TOKEN_RE = re.compile(r"__([^\r\n]+?)__")
-CHOICE_RE = re.compile(r"\{([^{}\r\n]*\|[^{}\r\n]*)\}")
 
 _CACHE_SIGNATURE = None
 _CACHE_WILDCARDS = None
@@ -104,8 +103,10 @@ def unique_keep_order(items):
         if not item:
             continue
 
-        if item not in seen:
-            seen.add(item)
+        key = item.lower()
+
+        if key not in seen:
+            seen.add(key)
             output.append(item)
 
     return output
@@ -1024,64 +1025,393 @@ def get_choices_for_token(wildcards, token, rng=None):
     return None
 
 
-def expand_random_choices(text, rng):
+def unescape_dynamic_prompt_text(text):
+    replacements = {
+        "\\{": "{",
+        "\\}": "}",
+        "\\|": "|",
+        "\\$": "$",
+        "\\_": "_",
+        "\\\\": "\\",
+    }
+
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+
+    return text
+
+
+def split_top_level(text, separator):
+    """
+    Splits text by a separator only when not inside nested dynamic prompt braces.
+    """
+    text = str(text)
+    separator = str(separator)
+
+    result = []
+    current = []
+    depth = 0
+    escaped = False
+    index = 0
+
+    while index < len(text):
+        character = text[index]
+
+        if escaped:
+            current.append(character)
+            escaped = False
+            index += 1
+            continue
+
+        if character == "\\":
+            current.append(character)
+            escaped = True
+            index += 1
+            continue
+
+        if character == "{":
+            depth += 1
+            current.append(character)
+            index += 1
+            continue
+
+        if character == "}":
+            depth = max(0, depth - 1)
+            current.append(character)
+            index += 1
+            continue
+
+        if depth == 0 and text.startswith(separator, index):
+            result.append("".join(current))
+            current = []
+            index += len(separator)
+            continue
+
+        current.append(character)
+        index += 1
+
+    result.append("".join(current))
+
+    return result
+
+
+def find_innermost_dynamic_block(text):
+    """
+    Finds the first innermost {...} block.
+    """
+    stack = []
+    escaped = False
+
+    for index, character in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+
+        if character == "\\":
+            escaped = True
+            continue
+
+        if character == "{":
+            stack.append(index)
+            continue
+
+        if character == "}" and stack:
+            start = stack.pop()
+            end = index
+            content = text[start + 1:end]
+            return start, end, content
+
+    return None
+
+
+def parse_dynamic_count(count_text):
+    """
+    Supports:
+    2
+    1-3
+    """
+    count_text = str(count_text or "").strip()
+
+    range_match = re.fullmatch(r"(\d+)\s*-\s*(\d+)", count_text)
+
+    if range_match:
+        low = int(range_match.group(1))
+        high = int(range_match.group(2))
+
+        if high < low:
+            low, high = high, low
+
+        return low, high
+
+    exact_match = re.fullmatch(r"\d+", count_text)
+
+    if exact_match:
+        value = int(count_text)
+        return value, value
+
+    return None
+
+
+def parse_weighted_option(option):
+    """
+    Supports:
+    red::0.2
+    blue::0.8
+    """
+    option = str(option).strip()
+
+    if "::" not in option:
+        return option, 1.0
+
+    left, right = option.rsplit("::", 1)
+    right = right.strip()
+
+    try:
+        weight = float(right)
+        return left.strip(), max(weight, 0.0)
+    except Exception:
+        return option, 1.0
+
+
+def weighted_choice(options, rng):
+    cleaned_options = []
+
+    for option in options:
+        option = str(option).strip()
+
+        if option:
+            cleaned_options.append(option)
+
+    if not cleaned_options:
+        return ""
+
+    parsed = [parse_weighted_option(option) for option in cleaned_options]
+    values = [item[0] for item in parsed]
+    weights = [item[1] for item in parsed]
+
+    if not values:
+        return ""
+
+    if sum(weights) <= 0:
+        return rng.choice(values)
+
+    return rng.choices(values, weights=weights, k=1)[0]
+
+
+def weighted_sample_without_replacement(options, count, rng):
+    available = []
+
+    for option in options:
+        option = str(option).strip()
+
+        if option:
+            available.append(option)
+
+    selected = []
+
+    if count <= 0 or not available:
+        return selected
+
+    count = min(count, len(available))
+
+    for _ in range(count):
+        choice = weighted_choice(available, rng)
+
+        if not choice:
+            break
+
+        selected.append(choice)
+
+        remaining = []
+        removed = False
+
+        for option in available:
+            option_text, _weight = parse_weighted_option(option)
+
+            if not removed and option_text == choice:
+                removed = True
+                continue
+
+            remaining.append(option)
+
+        available = remaining
+
+        if not available:
+            break
+
+    return selected
+
+
+def looks_like_explicit_wildcard(text):
+    text = str(text or "").strip()
+
+    return text.startswith("__") and text.endswith("__") and len(text) >= 4
+
+
+def resolve_dynamic_source_options(source_text, wildcards, rng):
+    """
+    Resolves the source part of a dynamic prompt.
+
+    Supported examples:
+    red|blue|green
+    __Round__
+    Round
+    folder/Round
+    folder/*
+    """
+    source_text = str(source_text or "").strip()
+
+    if not source_text:
+        return []
+
+    pipe_options = split_top_level(source_text, "|")
+
+    if len(pipe_options) > 1:
+        return [option.strip() for option in pipe_options if option.strip()]
+
+    if looks_like_explicit_wildcard(source_text):
+        wildcard_name = source_text[2:-2].strip()
+        choices = get_choices_for_token(wildcards, wildcard_name, rng)
+
+        if choices:
+            return choices
+
+        return [source_text]
+
+    choices = get_choices_for_token(wildcards, source_text, rng)
+
+    if choices:
+        return choices
+
+    return [source_text]
+
+
+def expand_dynamic_block(content, wildcards, rng):
+    """
+    Expands one {...} block.
+
+    Supported examples:
+    {red|blue|green}
+    {red::0.2|blue::0.8}
+    {2$$red|blue|green}
+    {1-3$$red|blue|green}
+    {1-3$$ and $$red|blue|green}
+    {1-3$$ and $$Round}
+    {1-3$$ and $$__Round__}
+    """
+    content = str(content or "").strip()
+
+    if not content:
+        return ""
+
+    dollar_parts = split_top_level(content, "$$")
+
+    if len(dollar_parts) >= 2:
+        count_info = parse_dynamic_count(dollar_parts[0])
+
+        if count_info is not None:
+            low, high = count_info
+            count = rng.randint(low, high)
+
+            if len(dollar_parts) == 2:
+                separator = ", "
+                source_text = dollar_parts[1]
+            else:
+                separator = dollar_parts[1]
+                source_text = "$$".join(dollar_parts[2:])
+
+            options = resolve_dynamic_source_options(source_text, wildcards, rng)
+            selected = weighted_sample_without_replacement(options, count, rng)
+
+            return separator.join(selected)
+
+    options = split_top_level(content, "|")
+
+    if len(options) > 1:
+        return weighted_choice(options, rng)
+
+    return content
+
+
+def expand_dynamic_prompts_once(text, wildcards, rng):
     current_text = str(text)
-    changed = False
+    found = find_innermost_dynamic_block(current_text)
 
-    def replace_choice(match):
-        nonlocal changed
+    if not found:
+        return current_text, False
 
-        content = match.group(1)
-        options = []
+    start, end, content = found
+    replacement = expand_dynamic_block(content, wildcards, rng)
 
-        for option in content.split("|"):
-            options.append(option.strip())
+    new_text = current_text[:start] + replacement + current_text[end + 1:]
 
-        if not options:
+    return new_text, True
+
+
+def expand_wildcard_tokens_once(text, wildcards, rng):
+    current_text = str(text)
+    changed_anything = False
+
+    def replace_token(match):
+        nonlocal changed_anything
+
+        token = match.group(1).strip()
+        choices = get_choices_for_token(wildcards, token, rng)
+
+        if not choices:
             return match.group(0)
 
-        changed = True
-        return rng.choice(options)
+        changed_anything = True
+        return rng.choice(choices)
 
-    new_text = CHOICE_RE.sub(replace_choice, current_text)
+    new_text = TOKEN_RE.sub(replace_token, current_text)
 
-    return new_text, changed
+    if new_text != current_text:
+        changed_anything = True
+
+    return new_text, changed_anything
 
 
-def expand_wildcards(text, wildcards, rng, max_depth=30):
+def expand_wildcards(text, wildcards, rng, max_depth=50):
+    """
+    Expands Dynamic Prompts syntax and local wildcard tokens.
+
+    Order:
+    1. Expand one innermost {...} block.
+    2. Expand __wildcard__ tokens.
+    3. Repeat, because wildcard results can contain more syntax.
+    """
     current_text = str(text)
 
     for _ in range(max_depth):
+        old_text = current_text
         changed_anything = False
 
-        current_text, changed_choices = expand_random_choices(current_text, rng)
+        current_text, changed_dynamic = expand_dynamic_prompts_once(
+            current_text,
+            wildcards,
+            rng,
+        )
 
-        if changed_choices:
+        if changed_dynamic:
             changed_anything = True
 
-        def replace_token(match):
-            nonlocal changed_anything
+        current_text, changed_tokens = expand_wildcard_tokens_once(
+            current_text,
+            wildcards,
+            rng,
+        )
 
-            token = match.group(1).strip()
-            choices = get_choices_for_token(wildcards, token, rng)
-
-            if not choices:
-                return match.group(0)
-
-            changed_anything = True
-            return rng.choice(choices)
-
-        new_text = TOKEN_RE.sub(replace_token, current_text)
-
-        if new_text != current_text:
+        if changed_tokens:
             changed_anything = True
 
-        current_text = new_text
+        if current_text != old_text:
+            changed_anything = True
 
         if not changed_anything:
-            return current_text
+            break
 
-    return current_text
+    return unescape_dynamic_prompt_text(current_text)
 
 
 class LocalWildcardText:
