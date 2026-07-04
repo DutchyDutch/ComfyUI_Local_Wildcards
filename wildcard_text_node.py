@@ -5,7 +5,6 @@ import re
 import secrets
 from pathlib import Path
 
-__version__ = "1.1.0"
 
 NODE_DIR = Path(__file__).resolve().parent
 WILDCARD_DIR = NODE_DIR / "wildcards"
@@ -22,6 +21,22 @@ MAX_DROPDOWN_ITEMS = 50000
 SUPPORTED_FILE_EXTENSIONS = [".txt", ".json", ".yaml", ".yml"]
 
 TOKEN_RE = re.compile(r"__([^\r\n]+?)__")
+
+# Internal-only marker characters used to track which parts of the
+# text were filled in by a wildcard or dynamic prompt. These never
+# reach the final output - they are always either stripped out
+# (for the plain text sent to generation nodes) or converted into
+# visible brackets (for the on-screen preview only).
+RESOLVED_START_MARKER = "\x01"
+RESOLVED_END_MARKER = "\x02"
+
+# Bracket characters used to visually highlight resolved text in the
+# preview box. Chosen deliberately because they are simple,
+# single-unit Unicode characters (not a "combined" character like
+# bold letters), so they render identically and safely on every
+# system, while still being bold and blocky enough to stand out.
+RESOLVED_BRACKET_OPEN = "【"
+RESOLVED_BRACKET_CLOSE = "】"
 
 _CACHE_SIGNATURE = None
 _CACHE_WILDCARDS = None
@@ -131,7 +146,13 @@ def token_contains_glob(token):
     return "*" in token or "?" in token or "[" in token
 
 
-def to_unicode_bold(text):
+def to_bold_dropdown_text(text):
+    """
+    Used only for building the insert_wildcard dropdown list (folder
+    header names), which is a completely separate, unrelated feature
+    from the preview box. Left as-is since it already works fine and
+    is not part of the preview text pipeline.
+    """
     normal_upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     bold_upper = "𝐀𝐁𝐂𝐃𝐄𝐅𝐆𝐇𝐈𝐉𝐊𝐋𝐌𝐍𝐎𝐏𝐐𝐑𝐒𝐓𝐔𝐕𝐖𝐗𝐘𝐙"
 
@@ -153,6 +174,56 @@ def to_unicode_bold(text):
         translation[ord(normal)] = bold
 
     return str(text).translate(translation)
+
+
+def strip_resolved_markers(text):
+    """
+    Removes the internal marker characters completely, leaving fully
+    plain text. This is what gets sent to the actual generation
+    pipeline (e.g. CLIP Text Encode), so it must never contain
+    special characters.
+    """
+    text = str(text)
+    text = text.replace(RESOLVED_START_MARKER, "")
+    text = text.replace(RESOLVED_END_MARKER, "")
+
+    return text
+
+
+def apply_resolved_markers(text):
+    """
+    Converts the internal start/end markers into visible brackets
+    for the preview box, wrapping only the outermost resolved chunk
+    of text - if a resolved value happens to contain further nested
+    markers (e.g. a wildcard result that itself contains another
+    wildcard), only a single outer bracket pair is shown rather than
+    stacking multiple brackets inside each other.
+
+    Always produces fully clean, printable text with no control
+    characters left in it, safe to display anywhere.
+    """
+    output_characters = []
+    depth = 0
+
+    for character in str(text):
+        if character == RESOLVED_START_MARKER:
+            depth += 1
+
+            if depth == 1:
+                output_characters.append(RESOLVED_BRACKET_OPEN)
+
+            continue
+
+        if character == RESOLVED_END_MARKER:
+            if depth == 1:
+                output_characters.append(RESOLVED_BRACKET_CLOSE)
+
+            depth = max(0, depth - 1)
+            continue
+
+        output_characters.append(character)
+
+    return "".join(output_characters)
 
 
 def add_dropdown_name(display_groups, directory_name, wildcard_name):
@@ -875,7 +946,7 @@ def build_grouped_dropdown(display_groups):
             if not wildcard_names:
                 continue
 
-            bold_directory = to_unicode_bold(directory)
+            bold_directory = to_bold_dropdown_text(directory)
             dropdown.append(f"{HEADER_PREFIX}{bold_directory}")
 
             for name in wildcard_names:
@@ -1324,12 +1395,18 @@ def expand_dynamic_block(content, wildcards, rng):
             options = resolve_dynamic_source_options(source_text, wildcards, rng)
             selected = weighted_sample_without_replacement(options, count, rng)
 
-            return separator.join(selected)
+            marked_selected = [
+                RESOLVED_START_MARKER + item + RESOLVED_END_MARKER for item in selected
+            ]
+
+            return separator.join(marked_selected)
 
     options = split_top_level(content, "|")
 
     if len(options) > 1:
-        return weighted_choice(options, rng)
+        chosen_value = weighted_choice(options, rng)
+
+        return RESOLVED_START_MARKER + chosen_value + RESOLVED_END_MARKER
 
     return content
 
@@ -1363,7 +1440,9 @@ def expand_wildcard_tokens_once(text, wildcards, rng):
             return match.group(0)
 
         changed_anything = True
-        return rng.choice(choices)
+        chosen_value = rng.choice(choices)
+
+        return RESOLVED_START_MARKER + chosen_value + RESOLVED_END_MARKER
 
     new_text = TOKEN_RE.sub(replace_token, current_text)
 
@@ -1381,6 +1460,17 @@ def expand_wildcards(text, wildcards, rng, max_depth=50):
     1. Expand one innermost {...} block.
     2. Expand __wildcard__ tokens.
     3. Repeat, because wildcard results can contain more syntax.
+
+    Returns a tuple:
+    (plain_text, marked_display_text)
+
+    plain_text          -> completely normal text, safe to send to
+                            generation nodes (e.g. CLIP Text Encode).
+    marked_display_text -> same text, but resolved wildcard/dynamic
+                            prompt values are wrapped in 【 】
+                            brackets, for the on-screen preview only.
+                            Contains no special/control characters, so
+                            it is always safe to display anywhere.
     """
     current_text = str(text)
 
@@ -1412,7 +1502,12 @@ def expand_wildcards(text, wildcards, rng, max_depth=50):
         if not changed_anything:
             break
 
-    return unescape_dynamic_prompt_text(current_text)
+    marked_text = unescape_dynamic_prompt_text(current_text)
+
+    plain_text = strip_resolved_markers(marked_text)
+    marked_display_text = apply_resolved_markers(marked_text)
+
+    return plain_text, marked_display_text
 
 
 class LocalWildcardText:
@@ -1449,6 +1544,7 @@ class LocalWildcardText:
                         "max": MAX_SEED,
                         "step": 1,
                         "display": "number",
+                        "control_after_generate": False,
                     },
                 ),
             }
@@ -1472,15 +1568,15 @@ class LocalWildcardText:
         rng = random.Random(used_seed)
 
         wildcards, _dropdown = get_wildcard_database()
-        output_text = expand_wildcards(text, wildcards, rng)
+        plain_text, marked_display_text = expand_wildcards(text, wildcards, rng)
 
         return {
             "ui": {
                 "used_seed": [str(used_seed)],
-                "expanded_text": [output_text],
+                "expanded_text": [marked_display_text],
             },
             "result": (
-                output_text,
+                plain_text,
                 used_seed,
             ),
         }
