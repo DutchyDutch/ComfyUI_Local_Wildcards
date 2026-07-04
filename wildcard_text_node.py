@@ -243,6 +243,33 @@ def add_dropdown_name(display_groups, directory_name, wildcard_name):
     display_groups[directory_name].add(wildcard_name)
 
 
+def add_bare_alias_if_safe(database_names, bare_name, dropdown_directory, wildcards):
+    """
+    Only adds a short/ambiguous alias name (a bare filename, a bare
+    nested JSON/YAML key, or a leaf name) if the file lives directly
+    in the Root wildcards folder AND no other wildcard has already
+    claimed that exact name.
+
+    This stops unrelated files - or unrelated nested keys buried
+    inside completely different JSON/YAML files, in any subfolder -
+    from silently merging their choices into an unrelated wildcard
+    that happens to share the same short name (e.g. a "color" key
+    nested under "hair" leaking into the Root "color" wildcard).
+    """
+    if dropdown_directory != ROOT_GROUP_NAME:
+        return
+
+    bare_name = normalize_wildcard_name(bare_name)
+
+    if not bare_name:
+        return
+
+    if bare_name in wildcards or bare_name.lower() in wildcards:
+        return
+
+    database_names.append(bare_name)
+
+
 def add_name_to_database(
     wildcards,
     display_groups,
@@ -381,10 +408,10 @@ def load_txt_file(path, wildcards, display_groups):
         database_names = unique_keep_order(
             [
                 relative_name,
-                simple_name,
-                leaf_name(relative_name),
             ]
         )
+
+        add_bare_alias_if_safe(database_names, simple_name, dropdown_directory, wildcards)
 
         display_names_to_show = unique_keep_order(
             [
@@ -403,7 +430,6 @@ def load_txt_file(path, wildcards, display_groups):
 
     except Exception as error:
         print(f"[ComfyUI Local Wildcards] Could not read TXT file {path}: {error}")
-
 
 def data_path_to_dot_name(parts):
     clean_parts = []
@@ -468,12 +494,15 @@ def walk_data(
                                 [
                                     current_dot_name,
                                     current_slash_name,
-                                    current_leaf,
                                     full_dot_name,
                                     full_slash_name,
                                     f"{file_simple_name}.{current_dot_name}",
                                     f"{file_simple_name}/{current_slash_name}",
                                 ]
+                            )
+
+                            add_bare_alias_if_safe(
+                                database_names, current_leaf, dropdown_directory, wildcards
                             )
 
                             display_names_to_show = unique_keep_order(
@@ -485,9 +514,17 @@ def walk_data(
                             database_names = unique_keep_order(
                                 [
                                     file_relative_name,
-                                    file_simple_name,
-                                    leaf_name(file_relative_name),
                                 ]
+                            )
+
+                            add_bare_alias_if_safe(
+                                database_names, file_simple_name, dropdown_directory, wildcards
+                            )
+                            add_bare_alias_if_safe(
+                                database_names,
+                                leaf_name(file_relative_name),
+                                dropdown_directory,
+                                wildcards,
                             )
 
                             display_names_to_show = unique_keep_order(
@@ -544,13 +581,18 @@ def walk_data(
                             [
                                 child_dot_name,
                                 child_slash_name,
-                                child_leaf,
-                                key,
                                 full_dot_name,
                                 full_slash_name,
                                 f"{file_simple_name}.{child_dot_name}",
                                 f"{file_simple_name}/{child_slash_name}",
                             ]
+                        )
+
+                        add_bare_alias_if_safe(
+                            database_names, key, dropdown_directory, wildcards
+                        )
+                        add_bare_alias_if_safe(
+                            database_names, child_leaf, dropdown_directory, wildcards
                         )
 
                         display_names_to_show = unique_keep_order(
@@ -575,9 +617,14 @@ def walk_data(
                 database_names = unique_keep_order(
                     [
                         file_relative_name,
-                        file_simple_name,
-                        leaf_name(file_relative_name),
                     ]
+                )
+
+                add_bare_alias_if_safe(
+                    database_names, file_simple_name, dropdown_directory, wildcards
+                )
+                add_bare_alias_if_safe(
+                    database_names, leaf_name(file_relative_name), dropdown_directory, wildcards
                 )
 
                 display_names_to_show = unique_keep_order(
