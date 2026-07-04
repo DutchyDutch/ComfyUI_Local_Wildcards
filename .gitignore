@@ -9,3 +9,4 @@ Thumbs.db
 # Keep the wildcards folder but ignore all personal text/JSON/YAML contents inside it
 wildcards/*
 !wildcards/.gitkeep
+!wildcards/color.txt
