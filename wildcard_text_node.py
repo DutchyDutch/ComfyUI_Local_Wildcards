@@ -50,6 +50,27 @@ def ensure_wildcard_dir():
         print(f"[ComfyUI Local Wildcards] Could not create wildcards folder: {error}")
 
 
+def read_text_file_safely(path):
+    """
+    Reads a text file trying several common encodings in order.
+    Falls back to UTF-8 with lossy character replacement as a last
+    resort, so a badly-encoded wildcard file never crashes loading
+    or silently fails to load - worst case, one odd character gets
+    swapped out, but the rest of the file still loads correctly.
+    """
+    encodings_to_try = ["utf-8-sig", "utf-8", "cp1252", "latin-1"]
+
+    for encoding in encodings_to_try:
+        try:
+            with open(path, "r", encoding=encoding) as file:
+                return file.read()
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+
+    with open(path, "r", encoding="utf-8", errors="replace") as file:
+        return file.read()
+
+
 def normalize_wildcard_name(name):
     name = str(name or "").strip()
     name = name.replace("\\", "/")
@@ -391,12 +412,13 @@ def load_txt_file(path, wildcards, display_groups):
     try:
         choices = []
 
-        with open(path, "r", encoding="utf-8") as file:
-            for line in file.readlines():
-                cleaned = clean_text_line(line)
+        text = read_text_file_safely(path)
 
-                if cleaned is not None:
-                    choices.append(cleaned)
+        for line in text.splitlines():
+            cleaned = clean_text_line(line)
+
+            if cleaned is not None:
+                choices.append(cleaned)
 
         if not choices:
             return
@@ -648,8 +670,8 @@ def walk_data(
 
 def load_json_file(path, wildcards, display_groups):
     try:
-        with open(path, "r", encoding="utf-8") as file:
-            data = json.load(file)
+        text = read_text_file_safely(path)
+        data = json.loads(text)
 
         relative_name = normalize_relative_name(path)
         simple_name = path.stem
@@ -874,8 +896,7 @@ def fix_simple_yaml_lists(value):
 
 def load_yaml_file(path, wildcards, display_groups):
     try:
-        with open(path, "r", encoding="utf-8") as file:
-            text = file.read()
+        text = read_text_file_safely(path)
 
         data = None
 
