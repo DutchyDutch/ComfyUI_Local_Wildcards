@@ -1,5 +1,5 @@
 # ComfyUI Local Wildcards
-![Version](https://img.shields.io/badge/version-v1.2.0-blue.svg)
+![Version](https://img.shields.io/badge/version-v1.2.2-blue.svg)
 
 A robust localized wildcard, random choices, and nested pattern expansion node for ComfyUI.
 Supports simple `.txt` files, hierarchical structured `.yaml` / `.yml` configurations, and nested `.json` formats. It is designed as a powerful, lightweight replacement for older wildcard nodes that are no longer maintained.
