@@ -1,9 +1,14 @@
 [project]
-name = "comfyui-local-wildcards"
-version = "1.2.2"
+name = "comfyui_local_wildcards"
 description = "Local wildcard text node for ComfyUI with robust encoding support"
+version = "1.2.2"
 license = "MIT"
+
+[project.urls]
+Repository = "https://github.com/DutchyDutch/ComfyUI_Local_Wildcards"
+#  Used by Comfy Registry https://comfyregistry.org
 
 [tool.comfy]
 PublisherId = "DutchyDutch"
-DisplayName = "ComfyUI Local Wildcards"
+DisplayName = "ComfyUI_Local_Wildcards"
+Icon = ""
