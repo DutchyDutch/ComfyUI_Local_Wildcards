@@ -9,6 +9,6 @@ Repository = "https://github.com/DutchyDutch/ComfyUI_Local_Wildcards"
 #  Used by Comfy Registry https://comfyregistry.org
 
 [tool.comfy]
-PublisherId = "DutchyDutch"
+PublisherId = "dutchydutch"
 DisplayName = "ComfyUI_Local_Wildcards"
 Icon = ""
