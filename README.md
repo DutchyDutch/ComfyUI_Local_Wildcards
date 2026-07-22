@@ -1,10 +1,22 @@
 # ComfyUI Local Wildcards
-![Version](https://img.shields.io/badge/version-v1.2.2-blue.svg)
+![Version](https://img.shields.io/badge/version-v1.2.3-blue.svg)
 
 A robust localized wildcard, random choices, and nested pattern expansion node for ComfyUI.
 Supports simple `.txt` files, hierarchical structured `.yaml` / `.yml` configurations, and nested `.json` formats. It is designed as a powerful, lightweight replacement for older wildcard nodes that are no longer maintained.
 
 ## Features
+
+## Where Your Wildcards Are Stored
+
+Wildcard files now live in ComfyUI's `user/ComfyUI_Local_Wildcards/` folder (inside your main ComfyUI directory), not inside this node's own folder. This keeps your wildcard files completely separate from the code, so they survive updates cleanly.
+
+If you were using an earlier version of this node, your existing wildcard files will be **automatically migrated** the first time you load ComfyUI after updating — no action needed.
+
+## Reinstall / Uninstall Safety
+
+If you use ComfyUI-Manager's **Reinstall** option on this node, your wildcard files are automatically backed up before removal and restored afterward, so you won't lose your custom wildcards. A normal **Uninstall** (without reinstalling) leaves your wildcard files untouched in `user/ComfyUI_Local_Wildcards/`.
+
+
 
 - **`__wildcard__` syntax** — pulls a random line/value from a matching wildcard file (e.g. `__color__`, `__folder/color__`)
 - **Dynamic prompt syntax** — inline random choices without needing a file, e.g. `{red|blue|green}`

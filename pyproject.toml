@@ -1,7 +1,7 @@
 [project]
 name = "comfyui_local_wildcards"
 description = "Local wildcard text node for ComfyUI with robust encoding support"
-version = "1.2.2"
+version = "1.2.3"
 license = "MIT"
 
 [project.urls]
